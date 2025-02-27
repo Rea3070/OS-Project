@@ -8,6 +8,7 @@
 #define PROMPT "wish> "
 #define MAX_PATHS 64
 static char *manypath[MAX_PATHS] = { "\bin", NULL}; //path declaration for later use
+char error_message[30] = "An error has occurred\n";
 
 // Function prototypes
 void parse_input(char *input, char **args);
@@ -23,7 +24,7 @@ int main(int argc, char *argv[]) {
     if (argc == 2) {
         input_stream = fopen(argv[1], "r");
         if (input_stream == NULL) {
-            fprintf(stderr, "Error: Could not open file %s\n", argv[1]);
+            write(STDERR_FILENO, error_message, strlen(error_message)); //error message
             exit(1);
         }
     } else if (argc > 2) {
@@ -44,8 +45,7 @@ int main(int argc, char *argv[]) {
                 // End of file (EOF) reached
                 break;
             } else {
-                perror("getline");
-                exit(1);
+                pwrite(STDERR_FILENO, error_message, strlen(error_message)); //error message
             }
         }
 
@@ -87,25 +87,65 @@ void parse_input(char *input, char **args) {
 
 // Execute a command
 void execute_command(char **args) {
-    // Handle built-in commands
-    if (is_builtin_command(args)) {
-        return;
+    char *commands[MAX_ARGS];
+    int num_commands = 0;
+
+    char *command = strtok(args[0], "&");
+    while (command != NULL && num_commands < MAX_ARGS - 1) {
+        commands[num_commands++] = command;
+        command = strtok(NULL, "&");
+    }
+    commands[num_commands] = NULL; // Null-terminate the command list
+
+    pid_t pid[MAX_ARGS];
+    int num_pids = 0;
+
+    for(int i = 0; i < num_commands; i++) {
+        char *command_args[MAX_ARGS];
+        parse_input(commands[i], command_args);
+
+        if(command_args[0] == NULL) {
+            continue; // Skip empty commands
+        }
+
+        // Check for built-in commands
+        if (is_builtin_command(command_args)) {
+            continue;
+        }
+
+        // Fork a child process
+        pid[num_pids] = fork();
+        if (pid[num_pids] == 0) { // Child process
+            // Construct the full path for the command
+            char full_path[256];
+            int found = 0;
+            for (int j = 0; manypath[j] != NULL; j++) {
+                snprintf(full_path, sizeof(full_path), "%s/%s", manypath[j], command_args[0]);
+                if (access(full_path, X_OK) == 0) {
+                    found = 1;
+                    break;
+                }
+            }
+
+            if (!found) {
+                write(STDERR_FILENO, error_message, strlen(error_message)); //error message
+                exit(1);
+            }
+
+            // Execute the command
+            execv(full_path, command_args);
+            write(STDERR_FILENO, error_message, strlen(error_message)); //error message
+            exit(1);
+        } else if (pid[num_pids] < 0) { // Fork failed
+            write(STDERR_FILENO, error_message, strlen(error_message)); //error message
+        } else { // Parent process
+            num_pids++;
+        }
     }
 
-    // Fork a child process
-    pid_t pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        exit(1);
-    } else if (pid == 0) {
-        // Child process: execute command
-        execvp(args[0], args);
-        // If execvp returns, there was an error
-        fprintf(stderr, "Error: Command not found: %s\n", args[0]);
-        exit(1);
-    } else {
-        // Parent process: wait for child to finish
-        wait(NULL);
+    // Wait for all child processes to finish
+    for (int i = 0; i < num_pids; i++) {
+        waitpid(pid[i], NULL, 0);
     }
 }
 
@@ -121,7 +161,7 @@ int is_builtin_command(char **args) {
 
     if (strcmp(args[0], "exit") == 0) {
         if (argnum > 1) {
-            fprintf(stderr, "Error: Too many arguments. \n"); // may be incorrect error message format
+            write(STDERR_FILENO, error_message, strlen(error_message));  
             return 1;
         }
         exit(0);
@@ -130,12 +170,12 @@ int is_builtin_command(char **args) {
 
     if (strcmp(args[0], "cd") == 0) {
         if (argnum != 2) {
-            fprintf(stderr, "Error: Too many arguemtns. \n"); // again may be incorrect error message format
+            write(STDERR_FILENO, error_message, strlen(error_message));  
             return 1;
         }
         
         if (chdir(args[1]) != 0) { // runs chdir, if it doesn't return 0, it failed
-            fprintf(stderr, "Error: directory does not exist. \n");
+            write(STDERR_FILENO, error_message, strlen(error_message)); //error message
             return 1;
         }
 
