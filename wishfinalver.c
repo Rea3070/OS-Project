@@ -100,41 +100,52 @@ void execute_command(char **args) {
     pid_t pid[MAX_ARGS];
     int num_pids = 0;
 
-    // Execute each command in parallel
-    for (int i = 0; i < num_commands; i++) {
-        char *args[MAX_ARGS];
-        parse_input(commands[i], args);
+    for(int i = 0; i < num_commands; i++) {
+        char *command_args[MAX_ARGS];
+        parse_input(commands[i], command_args);
 
-        // Handle empty command
-        if (args[0] == NULL) {
-            continue;
+        if(command_args[0] == NULL) {
+            continue; // Skip empty commands
         }
 
-        // Handle built-in commands
-        if (is_builtin_command(args)) {
+        // Check for built-in commands
+        if (is_builtin_command(command_args)) {
             continue;
         }
 
         // Fork a child process
-        pid_t pid = fork();
-        if (pid < 0) {
-            perror("fork");
-            exit(1);
-        } else if (pid == 0) {
-            // Child process: execute command
-            execvp(args[0], args);
-            // If execvp returns, there was an error
+        pid[num_pids] = fork();
+        if (pid[num_pids] == 0) { // Child process
+            // Construct the full path for the command
+            char full_path[256];
+            int found = 0;
+            for (int j = 0; manypath[j] != NULL; j++) {
+                snprintf(full_path, sizeof(full_path), "%s/%s", manypath[j], command_args[0]);
+                if (access(full_path, X_OK) == 0) {
+                    found = 1;
+                    break;
+                }
+            }
+
+            if (!found) {
+                write(STDERR_FILENO, error_message, strlen(error_message)); //error message
+                exit(1);
+            }
+
+            // Execute the command
+            execv(full_path, command_args);
             write(STDERR_FILENO, error_message, strlen(error_message)); //error message
             exit(1);
-        } else {
-            // Parent process: store child PID
-            pids[num_pids++] = pid;
+        } else if (pid[num_pids] < 0) { // Fork failed
+            write(STDERR_FILENO, error_message, strlen(error_message)); //error message
+        } else { // Parent process
+            num_pids++;
         }
     }
 
-    // Wait for all child processes to complete
+    // Wait for all child processes to finish
     for (int i = 0; i < num_pids; i++) {
-        waitpid(pids[i], NULL, 0);
+        waitpid(pid[i], NULL, 0);
     }
 }
 
