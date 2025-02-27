@@ -12,7 +12,7 @@ char error_message[30] = "An error has occurred\n";
 
 // Function prototypes
 void parse_input(char *input, char **args);
-void execute_command(char **args);
+void execute_command(char *input);
 int is_builtin_command(char **args);
 
 int main(int argc, char *argv[]) {
@@ -45,24 +45,15 @@ int main(int argc, char *argv[]) {
                 // End of file (EOF) reached
                 break;
             } else {
-                pwrite(STDERR_FILENO, error_message, strlen(error_message)); //error message
+                write(STDERR_FILENO, error_message, strlen(error_message)); //error message
             }
         }
 
         // Remove newline character
         input[strcspn(input, "\n")] = '\0';
 
-        // Parse input into arguments
-        char *args[MAX_ARGS];
-        parse_input(input, args);
-
-        // Handle empty input
-        if (args[0] == NULL) {
-            continue;
-        }
-
-        // Execute command
-        execute_command(args);
+        // Execute command(s)
+        execute_command(input);
     }
 
     // Cleanup
@@ -85,67 +76,57 @@ void parse_input(char *input, char **args) {
     args[i] = NULL; // Null-terminate the argument list
 }
 
-// Execute a command
-void execute_command(char **args) {
+// Execute a command or multiple commands in parallel
+void execute_command(char *input) {
     char *commands[MAX_ARGS];
     int num_commands = 0;
 
-    char *command = strtok(args[0], "&");
+    // Split input by '&' to get individual commands
+    char *command = strtok(input, "&");
     while (command != NULL && num_commands < MAX_ARGS - 1) {
         commands[num_commands++] = command;
         command = strtok(NULL, "&");
     }
-    commands[num_commands] = NULL; // Null-terminate the command list
+    commands[num_commands] = NULL;
 
-    pid_t pid[MAX_ARGS];
+    pid_t pids[MAX_ARGS];
     int num_pids = 0;
 
-    for(int i = 0; i < num_commands; i++) {
-        char *command_args[MAX_ARGS];
-        parse_input(commands[i], command_args);
+    // Execute each command in parallel
+    for (int i = 0; i < num_commands; i++) {
+        char *args[MAX_ARGS];
+        parse_input(commands[i], args);
 
-        if(command_args[0] == NULL) {
-            continue; // Skip empty commands
+        // Handle empty command
+        if (args[0] == NULL) {
+            continue;
         }
 
-        // Check for built-in commands
-        if (is_builtin_command(command_args)) {
+        // Handle built-in commands
+        if (is_builtin_command(args)) {
             continue;
         }
 
         // Fork a child process
-        pid[num_pids] = fork();
-        if (pid[num_pids] == 0) { // Child process
-            // Construct the full path for the command
-            char full_path[256];
-            int found = 0;
-            for (int j = 0; manypath[j] != NULL; j++) {
-                snprintf(full_path, sizeof(full_path), "%s/%s", manypath[j], command_args[0]);
-                if (access(full_path, X_OK) == 0) {
-                    found = 1;
-                    break;
-                }
-            }
-
-            if (!found) {
-                write(STDERR_FILENO, error_message, strlen(error_message)); //error message
-                exit(1);
-            }
-
-            // Execute the command
-            execv(full_path, command_args);
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            exit(1);
+        } else if (pid == 0) {
+            // Child process: execute command
+            execvp(args[0], args);
+            // If execvp returns, there was an error
             write(STDERR_FILENO, error_message, strlen(error_message)); //error message
             exit(1);
-        } else if (pid[num_pids] < 0) { // Fork failed
-            write(STDERR_FILENO, error_message, strlen(error_message)); //error message
-        } else { // Parent process
-            num_pids++;
+        } else {
+            // Parent process: store child PID
+            pids[num_pids++] = pid;
         }
     }
 
-    // Wait for all child processes to finish
+    // Wait for all child processes to complete
     for (int i = 0; i < num_pids; i++) {
-        waitpid(pid[i], NULL, 0);
+        waitpid(pids[i], NULL, 0);
     }
 }
 
